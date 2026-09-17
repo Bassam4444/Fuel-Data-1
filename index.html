@@ -10,8 +10,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Fuel Data">
-<link rel="apple-touch-icon" href="icon-192.png">
-<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="icon" href="icons/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -445,7 +445,7 @@
   <div class="header">
     <div class="header-top">
       <div class="header-left">
-        <button class="icon-btn" onclick="toast('Menu — single-screen demo, nothing hidden here')">☰</button>
+        <button class="icon-btn" onclick="openBackupModal()">☰</button>
         <div class="brand">
           <div class="brand-mark">⛽</div>
           <div class="brand-title">FUEL DATA</div>
@@ -636,6 +636,57 @@
     </div>
   </div>
 
+  <!-- ================= BACKUP & RESTORE SHEET ================= -->
+  <div class="overlay" id="backupOverlay" onclick="if(event.target===this) closeBackupModal()">
+    <div class="sheet">
+      <div class="sheet-grip"></div>
+      <div class="sheet-head">
+        <div class="sheet-head-left">
+          <div class="sheet-icon" style="background:#E4F6EC;">💾</div>
+          <div>
+            <p class="sheet-title">Backup &amp; Restore</p>
+            <p class="sheet-sub">Keep your fuel records safe outside this device</p>
+          </div>
+        </div>
+        <button class="sheet-close" onclick="closeBackupModal()">✕</button>
+      </div>
+      <div class="sheet-body">
+
+        <div class="live-summary" style="margin-top:0;">
+          <div class="ls-head">
+            <div class="ls-head-left"><span class="dot"></span>ON THIS DEVICE</div>
+          </div>
+          <div class="ls-grid" style="grid-template-columns:1fr 1fr;">
+            <div class="ls-amount">
+              <div class="lsv num" id="backupRecCount">0</div>
+              <div class="lsl">FUEL RECORDS</div>
+            </div>
+            <div class="ls-profit">
+              <div class="lsv num" id="backupLastSaved">—</div>
+              <div class="lsl">LAST SAVED</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="field-label" style="margin-top:4px;">EXPORT A BACKUP</div>
+        <div class="opt-desc" style="margin-bottom:12px;">
+          Saves every fuel record to a single file. Store it in Google Drive, email it to yourself,
+          or keep it in your Files app — it isn't affected if the app is ever uninstalled.
+        </div>
+        <button class="btn-primary" onclick="downloadBackup()">⬇ Export Backup (.json)</button>
+
+        <div class="field-label" style="margin-top:20px;">RESTORE FROM A BACKUP</div>
+        <div class="opt-desc" style="margin-bottom:12px;">
+          Choose a backup file you exported earlier. <b>This replaces all records currently in the app</b> —
+          export a fresh backup first if you want to keep what's here now.
+        </div>
+        <input type="file" id="restoreFileInput" accept="application/json,.json" style="display:none" onchange="restoreBackup(event)">
+        <button class="btn-secondary" style="width:100%;" onclick="document.getElementById('restoreFileInput').click()">📂 Choose Backup File to Restore</button>
+
+      </div>
+    </div>
+  </div>
+
   <!-- ================= PDF PREVIEW SHEET ================= -->
   <div class="overlay" id="pdfOverlay" onclick="if(event.target===this) closePdfModal()">
     <div class="sheet">
@@ -690,10 +741,13 @@ function loadState(){
   return { records: defaultRecords, nextId: 5 };
 }
 
+const LASTSAVED_KEY = 'fuelDataApp.lastSaved.v1';
+
 function saveState(){
   try{
     localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
     localStorage.setItem(NEXTID_KEY, String(nextId));
+    localStorage.setItem(LASTSAVED_KEY, new Date().toISOString());
   }catch(e){ console.warn('Could not save fuel data — device storage may be full.', e); toast('⚠️ Could not save — storage may be full'); }
 }
 
@@ -1218,6 +1272,72 @@ function shareReport(){
     navigator.clipboard?.writeText(text);
     toast('Summary copied to clipboard');
   }
+}
+
+/* ============================ BACKUP & RESTORE ============================ */
+function openBackupModal(){
+  document.getElementById('backupRecCount').textContent = records.length;
+  const last = localStorage.getItem(LASTSAVED_KEY);
+  document.getElementById('backupLastSaved').textContent = last
+    ? new Date(last).toLocaleString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})
+    : 'Never';
+  document.getElementById('backupOverlay').classList.add('open');
+}
+function closeBackupModal(){ document.getElementById('backupOverlay').classList.remove('open'); }
+
+function downloadBackup(){
+  const payload = {
+    app: 'fuel-data-app',
+    exportedAt: new Date().toISOString(),
+    nextId,
+    records
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0,10);
+  a.href = url;
+  a.download = `fuel-data-backup-${stamp}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('Backup file downloaded');
+}
+
+function restoreBackup(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    let parsed;
+    try{ parsed = JSON.parse(reader.result); }
+    catch(e){ toast('⚠️ That file is not a valid backup'); event.target.value=''; return; }
+
+    const incoming = Array.isArray(parsed.records) ? parsed.records : (Array.isArray(parsed) ? parsed : null);
+    if(!incoming){ toast('⚠️ That file is not a valid backup'); event.target.value=''; return; }
+
+    const ok = confirm(`Restore ${incoming.length} fuel record(s) from this backup?\n\nThis replaces the ${records.length} record(s) currently on this device.`);
+    event.target.value = '';
+    if(!ok) return;
+
+    records = incoming.map(r => ({
+      id: r.id ?? (nextId++),
+      plate: String(r.plate || '').toUpperCase(),
+      date: r.date,
+      volume: Number(r.volume) || 0,
+      sell: Number(r.sell) || 0,
+      cost: Number(r.cost) || 0,
+    }));
+    nextId = parsed.nextId && parsed.nextId > nextId
+      ? parsed.nextId
+      : Math.max(0, ...records.map(r=>r.id)) + 1;
+
+    saveState();
+    activeTab = 'ALL';
+    render();
+    closeBackupModal();
+    toast('Backup restored — ' + records.length + ' records loaded');
+  };
+  reader.readAsText(file);
 }
 
 /* ============================ INIT ============================ */
